@@ -14,7 +14,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
 
     event TokensReleasedForLinear(address beneficiary, uint256 amount);
-    event TokensReleasedForPDO(address beneficiary, uint256 amount);
+    event TokensReleasedForSAPD(address beneficiary, uint256 amount);
     event BeneficiaryAdded(
         address beneficiary,
         uint256 released,
@@ -22,15 +22,10 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         uint256 percentage,
         bool haveSubWallets,
         bool valid,
-        bool isPDO
+        bool isSAPD
     );
     event BeneficiaryValidStatusUpdated(address beneficiary, bool valid);
-
-    struct VestingDetails {
-        uint256 startTime;
-        uint256 endTime;
-        bool initialized;
-    }
+    event BeneficiaryAddressUpdated(address oldBeneficiary, address newBeneficiary);
 
     struct BeneficiaryDetails {
         uint256 released;
@@ -42,11 +37,12 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         uint256 previousRoundTokens;
         bool haveSubWallets;
         bool valid;
-        bool isPDO;
+        bool isSAPD;
     }
 
     struct SubWalletDetails {
         address parentWallet;
+        uint256 index;
         bool valid;
     }
 
@@ -117,7 +113,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         uint256 _percentage,
         bool _haveSubWallets,
         bool _startFromNow,
-        bool _isPDO
+        bool _isSAPD
     )
         public
         onlyOwner
@@ -131,7 +127,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         beneficiaryDetails[_beneficiary].lastReleasedAt = _startFromNow
             ? block.timestamp
             : START_TIME;
-        beneficiaryDetails[_beneficiary].isPDO = _isPDO;
+        beneficiaryDetails[_beneficiary].isSAPD = _isSAPD;
         beneficiaryDetails[_beneficiary]
             .totalReleasableToken = TOTAL_VESTING_TOKENS.mul(_percentage).div(
             100
@@ -144,11 +140,11 @@ contract TokenVesting is Ownable, ReentrancyGuard {
             _percentage,
             _haveSubWallets,
             true,
-            _isPDO
+            _isSAPD
         );
     }
 
-    function updateBeneficiaryIsValid(address _beneficiary, bool _isValid)
+    function updateBeneficiaryValidStatus(address _beneficiary, bool _isValid)
         external
         onlyOwner
     {
@@ -160,6 +156,26 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         beneficiaryDetails[_beneficiary].valid = _isValid;
 
         emit BeneficiaryValidStatusUpdated(_beneficiary, _isValid);
+    }
+
+    function updateBeneficiaryAddress(address _oldBeneficiary, address _newBeneficiary)
+        external
+        onlyOwner
+    {
+        require(
+            beneficiaryDetails[_oldBeneficiary].valid,
+            "Invalid old beneficiary"
+        );
+        require(_newBeneficiary != address(0), "New beneficiary cannot be address zero");
+
+        beneficiaryDetails[_newBeneficiary] = beneficiaryDetails[_oldBeneficiary];
+        beneficiaryDetails[_oldBeneficiary].valid = false;
+
+        if(beneficiaryDetails[_oldBeneficiary].haveSubWallets) {
+            beneficiarySubWallets[_newBeneficiary] = beneficiarySubWallets[_oldBeneficiary];
+        }
+
+        emit BeneficiaryAddressUpdated(_oldBeneficiary, _newBeneficiary);
     }
 
     function addBeneficiarySubWallets(
@@ -175,20 +191,77 @@ contract TokenVesting is Ownable, ReentrancyGuard {
             beneficiarySubWallets[_beneficiary].push(_subWallets[i]);
             beneficiarySubWalletDetails[_subWallets[i]] = SubWalletDetails(
                 _beneficiary,
+                i,
                 true
             );
         }
     }
 
-    function updateBeneficiaryPercentage(
-        address _beneficiary,
-        uint256 _newPercentage
-    ) public onlyOwner limitTokensAlloted(_newPercentage) {
-        beneficiaryDetails[_beneficiary].percentage = _newPercentage;
+    function updateSubWalletValidStatus(address _subWallet, bool _valid)
+        public
+        onlyOwner
+    {
+        require(
+            beneficiarySubWalletDetails[_subWallet].parentWallet != address(0),
+            "Sub-wallet does not exist"
+        );
+        require(
+            beneficiarySubWalletDetails[_subWallet].valid != _valid,
+            "Cannot set same valid status for sub-wallet"
+        );
+
+        beneficiarySubWalletDetails[_subWallet].valid = _valid;
+
+        address[] storage parentSubWallets = beneficiarySubWallets[
+            beneficiarySubWalletDetails[_subWallet].parentWallet
+        ];
+        if (_valid) {
+            parentSubWallets.push(_subWallet);
+            beneficiarySubWalletDetails[_subWallet].index =
+                parentSubWallets.length -
+                1;
+        } else {
+            parentSubWallets[
+                beneficiarySubWalletDetails[_subWallet].index
+            ] = parentSubWallets[parentSubWallets.length - 1];
+            parentSubWallets.pop();
+        }
     }
 
-    function releaseLinearTokens(address beneficiary) public nonReentrant {
-        require(!beneficiaryDetails[beneficiary].isPDO, "Beneficiary does not follow Linear release approach");
+    function updateBeneficiaryPercentages(
+        address[] memory _beneficiaries,
+        uint256[] memory _newPercentages
+    ) public onlyOwner {
+        require(
+            _beneficiaries.length == _newPercentages.length,
+            "Unequal lengths of beneficiaries and new percentages"
+        );
+
+        for (uint256 i = 0; i < _beneficiaries.length; i++) {
+            percentTokensAlloted.sub(
+                beneficiaryDetails[_beneficiaries[i]].percentage
+            );
+            percentTokensAlloted.add(_newPercentages[i]);
+            beneficiaryDetails[_beneficiaries[i]].percentage = _newPercentages[
+                i
+            ];
+        }
+
+        require(
+            percentTokensAlloted <= 100,
+            "Tokens allocation percentage reaching above 100%"
+        );
+    }
+
+    function releaseLinearTokens(address beneficiary)
+        public
+        onlyOwner
+        nonReentrant
+    {
+        require(
+            !beneficiaryDetails[beneficiary].isSAPD,
+            "Beneficiary does not follow Linear release approach"
+        );
 
         (uint256 releasableTokens, uint256 roundsCovered) = getReleasableTokens(
             beneficiary
@@ -228,12 +301,15 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         emit TokensReleasedForLinear(beneficiary, releasableTokens);
     }
 
-    function releasePDOTokens(
+    function releaseSAPDTokens(
         address beneficiary,
         uint256 currentTokenPrice,
         uint256 avgTokenPrice
-    ) public nonReentrant {
-        require(beneficiaryDetails[beneficiary].isPDO, "Beneficiary does not follow PDO");
+    ) public onlyOwner nonReentrant {
+        require(
+            beneficiaryDetails[beneficiary].isSAPD,
+            "Beneficiary does not follow SAPD"
+        );
 
         (uint256 releasableTokens, uint256 roundsCovered) = getReleasableTokens(
             beneficiary
@@ -304,7 +380,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
 
         lastMarkedPrice = currentTokenPrice;
 
-        emit TokensReleasedForPDO(beneficiary, pdoReleasableTokens);
+        emit TokensReleasedForSAPD(beneficiary, pdoReleasableTokens);
     }
 
     // ====== GETTERS =======
@@ -338,11 +414,8 @@ contract TokenVesting is Ownable, ReentrancyGuard {
                 .totalReleasableToken;
 
             // Number of tokens vested till now for this role
-            uint256 releasable = totalReleasableTokens.div(TOTAL_ROUNDS).mul(
-                roundsPassed
-            );
+            _amount = totalReleasableTokens.div(TOTAL_ROUNDS).mul(roundsPassed);
 
-            (, _amount) = releasable.trySub(beneficiaryDetails[_for].released);
             _rounds = roundsPassed;
         } else {
             _amount = 0;
@@ -363,7 +436,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
             uint256 _totalReleasableToken,
             bool _haveSubWallets,
             bool _valid,
-            bool _isPDO
+            bool _isSAPD
         )
     {
         BeneficiaryDetails memory details = beneficiaryDetails[_beneficiary];
@@ -378,7 +451,21 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         _totalReleasableToken = details.totalReleasableToken;
         _haveSubWallets = details.haveSubWallets;
         _valid = details.valid;
-        _isPDO = details.isPDO;
+        _isSAPD = details.isSAPD;
+    }
+
+    function getAllBeneficiaryDetails(address _beneficiary)
+        public
+        view
+        returns (BeneficiaryDetails[] memory _details)
+    {
+        for (uint256 i = 0; i < beneficiaries.length; i++) {
+            BeneficiaryDetails memory details = beneficiaryDetails[
+                _beneficiary
+            ];
+            (details.releasable, ) = getReleasableTokens(_beneficiary);
+            _details[i] = details;
+        }
     }
 
     function getBeneficiaries() public view returns (address[] memory) {
