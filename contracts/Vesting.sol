@@ -25,7 +25,10 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         bool isSAPD
     );
     event BeneficiaryValidStatusUpdated(address beneficiary, bool valid);
-    event BeneficiaryAddressUpdated(address oldBeneficiary, address newBeneficiary);
+    event BeneficiaryAddressUpdated(
+        address oldBeneficiary,
+        address newBeneficiary
+    );
 
     struct BeneficiaryDetails {
         uint256 released;
@@ -61,6 +64,8 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     uint256 public totalReleasedTokens;
     uint256 public percentTokensAlloted;
 
+    address public sapdOfficerAddress;
+
     mapping(address => BeneficiaryDetails) beneficiaryDetails;
     mapping(address => SubWalletDetails) beneficiarySubWalletDetails;
 
@@ -81,11 +86,27 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         _;
     }
 
+    modifier onlySAPDOfficer() {
+        require(
+            msg.sender == sapdOfficerAddress,
+            "Only SAPD Officer can call this function"
+        );
+        _;
+    }
+
     // Cannot allocate more than 100% of TOTAL_VESTING_TOKENS
     modifier limitTokensAlloted(uint256 _percent) {
         require(
             percentTokensAlloted.add(_percent) <= 100,
             "Tokens allocation percentage summing up more than 100%"
+        );
+        _;
+    }
+
+    modifier onlyOwnerOrBeneficiary() {
+        require(
+            msg.sender == owner() || !beneficiaryDetails[msg.sender].isSAPD,
+            "Either caller is not Owner or Beneficiary does not follow linear vesting"
         );
         _;
     }
@@ -106,6 +127,13 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         addReleaseRange(60, 10, 0);
         addReleaseRange(80, 20, 0);
         addReleaseRange(100, 30, 0);
+    }
+
+    function updateSAPDOfficerAddress(address _newSAPDOfficer)
+        external
+        onlyOwner
+    {
+        sapdOfficerAddress = _newSAPDOfficer;
     }
 
     function addBeneficiary(
@@ -158,21 +186,29 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         emit BeneficiaryValidStatusUpdated(_beneficiary, _isValid);
     }
 
-    function updateBeneficiaryAddress(address _oldBeneficiary, address _newBeneficiary)
-        external
-        onlyOwner
-    {
+    function updateBeneficiaryAddress(
+        address _oldBeneficiary,
+        address _newBeneficiary
+    ) external onlyOwner {
         require(
             beneficiaryDetails[_oldBeneficiary].valid,
-            "Invalid old beneficiary"
+            "Beneficiary does not exist or is set invalid"
         );
-        require(_newBeneficiary != address(0), "New beneficiary cannot be address zero");
+        require(
+            _newBeneficiary != address(0),
+            "New beneficiary cannot be address zero"
+        );
 
-        beneficiaryDetails[_newBeneficiary] = beneficiaryDetails[_oldBeneficiary];
-        beneficiaryDetails[_oldBeneficiary].valid = false;
+        beneficiaryDetails[_newBeneficiary] = beneficiaryDetails[
+            _oldBeneficiary
+        ];
+        delete beneficiaryDetails[_oldBeneficiary];
 
-        if(beneficiaryDetails[_oldBeneficiary].haveSubWallets) {
-            beneficiarySubWallets[_newBeneficiary] = beneficiarySubWallets[_oldBeneficiary];
+        if (beneficiaryDetails[_oldBeneficiary].haveSubWallets) {
+            beneficiarySubWallets[_newBeneficiary] = beneficiarySubWallets[
+                _oldBeneficiary
+            ];
+            delete beneficiarySubWalletDetails[_oldBeneficiary];
         }
 
         emit BeneficiaryAddressUpdated(_oldBeneficiary, _newBeneficiary);
@@ -253,15 +289,8 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         );
     }
 
-    function releaseLinearTokens(address beneficiary)
-        public
-        onlyOwner
-        nonReentrant
-    {
-        require(
-            !beneficiaryDetails[beneficiary].isSAPD,
-            "Beneficiary does not follow Linear release approach"
-        );
+    function releaseLinearTokens() public onlyOwnerOrBeneficiary nonReentrant {
+        address beneficiary = msg.sender;
 
         (uint256 releasableTokens, uint256 roundsCovered) = getReleasableTokens(
             beneficiary
@@ -305,7 +334,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         address beneficiary,
         uint256 currentTokenPrice,
         uint256 avgTokenPrice
-    ) public onlyOwner nonReentrant {
+    ) public onlySAPDOfficer nonReentrant {
         require(
             beneficiaryDetails[beneficiary].isSAPD,
             "Beneficiary does not follow SAPD"
