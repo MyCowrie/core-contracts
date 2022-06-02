@@ -288,7 +288,7 @@ contract Stake is AccessControl, Pausable {
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
         require(
-            _minStake >= 0,
+            _minStake > 0,
             "setMinMaxStake: minumum amount cannot be ZERO"
         );
         require(

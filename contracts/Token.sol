@@ -26,11 +26,6 @@ contract CISToken is ERC20Capped, Ownable {
         _mint(msg.sender, _initialSupply);
     }
 
-    // Will be set at the time of deployment
-    function decimals() public pure override returns (uint8) {
-        return 9;
-    }
-
     function mint(address _account, uint256 _amount) public onlyVesting {
         _mint(_account, _amount);
     }
