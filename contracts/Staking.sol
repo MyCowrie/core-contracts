@@ -339,6 +339,11 @@ contract Stake is AccessControl, Pausable {
         );
     }
 
+    /**
+     * Admin can withdraw some tokens from the pool's reserve.
+     * @param _poolIndex Index of pool to withdraw token from.
+     * @param _amount to be withdrawn from the pool's reserve.
+     */
     function withdrawFunds(uint256 _poolIndex, uint256 _amount)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
@@ -346,13 +351,15 @@ contract Stake is AccessControl, Pausable {
         PoolInfo memory pool = pools[_poolIndex];
         require(
             pool.reserve - pool.promisedReward >= _amount,
-            "withdrawFunds: Amount should be lower that promised rewards."
+            "withdrawFunds: Amount should be lower than promised rewards."
         );
 
         require(
-            token.transferFrom(msg.sender, address(this), _amount),
+            token.transfer(msg.sender, _amount),
             "withdrawFunds: token transfer failed."
         );
+
+        pool.reserve -= _amount;
     }
 
     /**
@@ -490,6 +497,7 @@ contract Stake is AccessControl, Pausable {
         uint256 reward = calculateRew(_amount, pool.apy, pool.duration);
         uint256 totStakedAmount = pool.stakedAmount + _amount;
         pool.promisedReward += reward;
+
         require(
             _amount >= minStake,
             "deposit: You cannot deposit below the minimum amount."
@@ -500,8 +508,8 @@ contract Stake is AccessControl, Pausable {
             "deposit: You cannot deposit, have reached the maximum deposit amount."
         );
         require(
-            pool.reserve >= reward,
-            "deposit: This pool has no enough reward reserve"
+            pool.reserve >= pool.promisedReward,
+            "deposit: This pool does not have enough reward reserve"
         );
         require(
             pool.lockedLimit >= totStakedAmount,
