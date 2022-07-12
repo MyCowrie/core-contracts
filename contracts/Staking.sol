@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.7;
+pragma solidity 0.8.15;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
-// import "./lib/UintSet.sol";
 
 struct Set {
     // Storage of set values
@@ -183,6 +182,7 @@ contract Stake is AccessControl, Pausable {
     }
 
     struct StakerInfo {
+        address parentStaker;
         uint256 poolIndex;
         uint256 startTime;
         uint256 amount;
@@ -206,10 +206,10 @@ contract Stake is AccessControl, Pausable {
     // Pool Index => Pool Info
     PoolInfo[] public pools;
 
-    IERC20 public token;
+    IERC20 public immutable token;
     uint256 private unlocked = 1;
 
-    address public companyWallet;
+    address public immutable companyWallet;
 
     /**
      * @notice Checks if the pool exists
@@ -225,12 +225,9 @@ contract Stake is AccessControl, Pausable {
     /**
      * @notice Checks if the already finish.
      */
-    modifier isFinished(address _user, uint256 _stakerIndex) {
+    modifier isNotFinished(address _user, uint256 _stakerIndex) {
         StakerInfo memory staker = stakers[_user][_stakerIndex];
-        require(
-            staker.isFinished == false,
-            "isFinished: This index already finished."
-        );
+        require(!staker.isFinished, "isFinished: This index already finished.");
         _;
     }
 
@@ -287,10 +284,7 @@ contract Stake is AccessControl, Pausable {
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        require(
-            _minStake > 0,
-            "setMinMaxStake: minumum amount cannot be ZERO"
-        );
+        require(_minStake > 0, "setMinMaxStake: minimum amount cannot be ZERO");
         require(
             _maxStake > _minStake,
             "setMinMaxStake: maximum amount cannot be lower than minimum amount"
@@ -413,70 +407,8 @@ contract Stake is AccessControl, Pausable {
     }
 
     /**
-     * The created period can be edited by the admin.
-     * @param _poolIndex the index of the pool to be edited.
-     * @param _startTime pool start time in seconds.
-     * @param _duration pool duration time in seconds.
-     * @param _apy the new apy ratio.
-     * @param _lockedLimit maximum amount of tokens that can be locked for this pool
-     * @dev Reverts if the pool is not empty.
-     * @dev Reverts if the pool is not created before.
-     */
-    function editPool(
-        uint256 _poolIndex,
-        uint256 _startTime,
-        uint256 _duration,
-        uint256 _apy,
-        uint256 _lockedLimit
-    )
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        isPoolExist(_poolIndex)
-        isValid(_startTime, _duration, _apy)
-    {
-        PoolInfo storage pool = pools[_poolIndex];
-
-        pool.startTime = _startTime;
-        pool.duration = _duration;
-        pool.apy = _apy;
-        pool.lockedLimit = _lockedLimit;
-
-        emit NewPool(
-            _poolIndex,
-            _startTime,
-            _duration,
-            _apy,
-            _lockedLimit,
-            pool.promisedReward
-        );
-    }
-
-    /**
-     * The created period can be remove by the admin.
-     * @param _poolIndex the index of the to be removed pool.
-     * @dev Reverts if the pool is not empty.
-     * @dev Reverts if the pool is not created before.
-     */
-    function removePool(uint256 _poolIndex)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        isPoolExist(_poolIndex)
-    {
-        if (pools[_poolIndex].reserve > 0) {
-            require(
-                token.transfer(msg.sender, pools[_poolIndex].reserve),
-                "removePool: transfer failed."
-            );
-        }
-
-        delete pools[_poolIndex];
-
-        emit RemovePool(_poolIndex);
-    }
-
-    /**
      * Users can deposit money into any pool they want.
-     * @notice Each time the user makes a deposit, the structer is kept at a different stakerIndex so it can be in more than one or the same pool at the same time.
+     * @notice Each time the user makes a deposit, the staker is kept at a different stakerIndex so it can be in more than one or the same pool at the same time.
      * @notice Users can join the same pool more than once at the same time.
      * @notice Users can join different pools at the same time.
      * @param _amount amount of money to be deposited.
@@ -507,6 +439,8 @@ contract Stake is AccessControl, Pausable {
             (amountByPool[msg.sender][_poolIndex] + _amount) <= maxStake,
             "deposit: You cannot deposit, have reached the maximum deposit amount."
         );
+
+        // Check if the pool has enough reserve to give out the rewards including this staker's
         require(
             pool.reserve >= pool.promisedReward,
             "deposit: This pool does not have enough reward reserve"
@@ -547,28 +481,93 @@ contract Stake is AccessControl, Pausable {
         );
     }
 
-    /**
-     * Users can exit the period they are in at any time.
-     * @notice Users who are not penalized can withdraw their money directly with this function. Users who are penalized should execut the claimPending function after this process.
-     * @notice If the period has not finished, they will be penalized at the rate of mainPeanltyRate from their deposit.
-     * @notice If the period has not finished, they will be penalized at the rate of subPenaltyRate from their rewards.
-     * @notice Penalized users will be able to collect their rewards later with the claim function.
-     * @param _stakerIndex of the period want to exit.
-     * @dev reverts if the user's deposit amount is ZERO
-     * @dev reverts if the pool does not have enough funds to cover the reward
-     */
-    function withdraw(uint256 _stakerIndex)
+    function depositFor(
+        address _staker,
+        uint256 _amount,
+        uint256 _poolIndex
+    )
         external
         whenNotPaused
+        onlyRole(DEFAULT_ADMIN_ROLE)
         lock
-        isFinished(msg.sender, _stakerIndex)
+        isPoolExist(_poolIndex)
     {
-        StakerInfo storage staker = stakers[msg.sender][_stakerIndex];
+        uint256 index = currentStakerIndex[_staker];
+        StakerInfo storage staker = stakers[_staker][index];
+        staker.parentStaker = msg.sender;
+
+        PoolInfo storage pool = pools[_poolIndex];
+        uint256 reward = calculateRew(_amount, pool.apy, pool.duration);
+        uint256 totStakedAmount = pool.stakedAmount + _amount;
+        pool.promisedReward += reward;
+
+        require(
+            _amount >= minStake,
+            "deposit: You cannot deposit below the minimum amount."
+        );
+
+        require(
+            (amountByPool[_staker][_poolIndex] + _amount) <= maxStake,
+            "deposit: You cannot deposit, have reached the maximum deposit amount."
+        );
+        require(
+            pool.reserve >= pool.promisedReward,
+            "deposit: This pool does not have enough reward reserve"
+        );
+        require(
+            pool.lockedLimit >= totStakedAmount,
+            "deposit: The pool has reached its maximum capacity."
+        );
+
+        require(
+            block.timestamp >= pool.startTime,
+            "deposit: This pool hasn't started yet."
+        );
+
+        uint256 duration = pool.duration;
+        uint256 timestamp = block.timestamp;
+
+        require(
+            token.transferFrom(_staker, address(this), _amount),
+            "deposit: Token transfer failed."
+        );
+
+        staker.startTime = timestamp;
+        staker.amount = _amount;
+        staker.poolIndex = _poolIndex;
+        pool.stakedAmount += _amount;
+
+        currentStakerIndex[_staker] += 1;
+        amountByPool[_staker][_poolIndex] += _amount;
+
+        emit Deposit(
+            _staker,
+            _amount,
+            timestamp,
+            (timestamp + duration),
+            _poolIndex,
+            index
+        );
+    }
+
+    function withdrawFrom(address _staker, uint256 _stakerIndex)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        whenNotPaused
+        lock
+        isNotFinished(_staker, _stakerIndex)
+    {
+        StakerInfo storage staker = stakers[_staker][_stakerIndex];
+        require(
+            staker.parentStaker == msg.sender,
+            "withdraw: you are not the parent of this stake"
+        );
+
         PoolInfo storage pool = pools[staker.poolIndex];
 
         require(staker.amount > 0, "withdraw: Insufficient amount.");
 
-        uint256 closedTime = getClosedTime(msg.sender, _stakerIndex);
+        uint256 closedTime = getClosedTime(_staker, _stakerIndex);
         uint256 duration = _getStakerDuration(closedTime, staker.startTime);
         uint256 reward = calculateRew(staker.amount, pool.apy, duration);
 
@@ -581,7 +580,79 @@ contract Stake is AccessControl, Pausable {
             );
 
             staker.reward = 0;
-        } else { // Staker withdrawing at or after closing time
+        } else {
+            // Staker withdrawing at or after closing time
+            staker.reward = reward;
+            totalWithdraw += reward;
+        }
+
+        pool.reserve -= reward;
+        pool.promisedReward = pool.promisedReward <= reward
+            ? 0
+            : pool.promisedReward - reward;
+
+        pool.stakedAmount -= staker.amount;
+        amountByPool[_staker][staker.poolIndex] -= staker.amount;
+
+        // Transfer the staked amount back to parent wallet
+        // then remove this stake's info
+        _transferAndRemove(msg.sender, totalWithdraw, _staker, _stakerIndex);
+
+        emit Withdraw(
+            _staker,
+            totalWithdraw,
+            reward,
+            staker.poolIndex,
+            _stakerIndex
+        );
+    }
+
+    /**
+     * Users can exit the period they are in at any time.
+     * @notice Users who are not penalized can withdraw their money directly with this function. Users who are penalized should execut the claimPending function after this process.
+     * @notice If the period has not finished, they will be penalized at the rate of mainPeanltyRate from their deposit.
+     * @notice If the period has not finished, they will be penalized at the rate of subPenaltyRate from their rewards.
+     * @notice Penalized users will be able to collect their rewards later with the claim function.
+     * @param _stakerIndex of the period want to exit.
+     * @dev reverts if the user's deposit amount is ZERO
+     * @dev reverts if the pool does not have enough funds to cover the reward
+     */
+
+    function withdraw(uint256 _stakerIndex)
+        external
+        whenNotPaused
+        lock
+        isNotFinished(msg.sender, _stakerIndex)
+    {
+        StakerInfo storage staker = stakers[msg.sender][_stakerIndex];
+        address withdrawingAddress = staker.parentStaker == address(0) ? msg.sender : staker.parentStaker;
+
+        PoolInfo storage pool = pools[staker.poolIndex];
+
+        require(staker.amount > 0, "withdraw: Insufficient amount.");
+
+        uint256 closedTime = getClosedTime(msg.sender, _stakerIndex);
+        uint256 duration = _getStakerDuration(closedTime, staker.startTime);
+        uint256 reward = calculateRew(staker.amount, pool.apy, duration);
+
+        // This is checked to make sure that rewards don't get transferred
+        // from other pools' reserve(ultimately from staking contract's balance)
+        require(
+            reward <= pool.reserve,
+            "Pool does not have enough reserve for this reward"
+        );
+
+        // If staker is trying to withdraw before closing time
+        uint256 totalWithdraw = staker.amount;
+        if (closedTime > block.timestamp) {
+            require(
+                token.transfer(companyWallet, reward),
+                "transfer: transfer reward amount to company failed."
+            );
+
+            staker.reward = 0;
+        } else {
+            // Staker withdrawing at or after closing time
             staker.reward = reward;
             totalWithdraw += reward;
         }
@@ -594,12 +665,12 @@ contract Stake is AccessControl, Pausable {
         pool.stakedAmount -= staker.amount;
         amountByPool[msg.sender][staker.poolIndex] -= staker.amount;
 
-        _transferAndRemove(msg.sender, totalWithdraw, _stakerIndex);
+        _transferAndRemove(withdrawingAddress, totalWithdraw, msg.sender, _stakerIndex);
 
         emit Withdraw(
             msg.sender,
-            reward,
             totalWithdraw,
+            reward,
             staker.poolIndex,
             _stakerIndex
         );
@@ -614,7 +685,7 @@ contract Stake is AccessControl, Pausable {
         external
         whenNotPaused
         lock
-        isFinished(msg.sender, _stakerIndex)
+        isNotFinished(msg.sender, _stakerIndex)
     {
         StakerInfo storage staker = stakers[msg.sender][_stakerIndex];
         PoolInfo storage pool = pools[staker.poolIndex];
@@ -668,9 +739,11 @@ contract Stake is AccessControl, Pausable {
     function emergencyWithdraw(uint256 _stakerIndex)
         external
         whenPaused
-        isFinished(msg.sender, _stakerIndex)
+        isNotFinished(msg.sender, _stakerIndex)
     {
         StakerInfo memory staker = stakers[msg.sender][_stakerIndex];
+        address withdrawingAddress = staker.parentStaker == address(0) ? msg.sender : staker.parentStaker;
+
         PoolInfo storage pool = pools[staker.poolIndex];
 
         require(staker.amount > 0, "withdraw: Insufficient amount.");
@@ -683,7 +756,7 @@ contract Stake is AccessControl, Pausable {
             pool.duration
         );
         amountByPool[msg.sender][staker.poolIndex] -= withdrawAmount;
-        _transferAndRemove(msg.sender, withdrawAmount, _stakerIndex);
+        _transferAndRemove(withdrawingAddress, withdrawAmount, msg.sender, _stakerIndex);
         emit EmergencyWithdraw(
             msg.sender,
             withdrawAmount,
@@ -808,9 +881,10 @@ contract Stake is AccessControl, Pausable {
     function _transferAndRemove(
         address _user,
         uint256 _transferAmount,
+        address _staker,
         uint256 _stakerIndex
     ) private {
-        StakerInfo storage staker = stakers[_user][_stakerIndex];
+        StakerInfo storage staker = stakers[_staker][_stakerIndex];
         require(
             token.transfer(_user, _transferAmount),
             "_transferAndRemove: transfer failed."

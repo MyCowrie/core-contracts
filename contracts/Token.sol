@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity 0.8.15;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Capped.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 contract Token is ERC20Capped, Ownable {
-    using SafeMath for uint256;
-
     address public vestingAddress;
 
     modifier onlyVesting() {
@@ -27,14 +24,14 @@ contract Token is ERC20Capped, Ownable {
         ERC20Capped(1397255459 * 10**decimals())
     {
         _mint(msg.sender, _initialSupply);
-        // Call addVestingAddress function after deploying
+        // Call setVestingAddress function after deploying
     }
 
-    function mint(address _account, uint256 _amount) public onlyVesting {
+    function mint(address _account, uint256 _amount) external onlyVesting {
         _mint(_account, _amount);
     }
 
-    function addVestingAddress(address _vestingAddress) external onlyOwner {
+    function setVestingAddress(address _vestingAddress) external onlyOwner {
         require(
             vestingAddress != _vestingAddress,
             "Cannot set same Vesting address"
