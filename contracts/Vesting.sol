@@ -4,36 +4,17 @@ pragma solidity 0.8.15;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 interface IERC20Mintable is IERC20Metadata {
     function mint(address _account, uint256 _amount) external;
 }
 
-contract TokenVesting is Ownable, ReentrancyGuard {
+contract TokenVesting is Ownable {
     using SafeMath for uint256;
-
-    event TokensReleasedForLinear(address beneficiary, uint256 amount);
-    event TokensReleasedForSAPD(address beneficiary, uint256 amount);
-    event BeneficiaryAdded(
-        address beneficiary,
-        uint256 released,
-        uint256 releasable,
-        uint256 percentage,
-        bool haveSubWallets,
-        bool valid,
-        bool isSAPD
-    );
-    event BeneficiaryValidStatusUpdated(address beneficiary, bool valid);
-    event BeneficiaryAddressUpdated(
-        address oldBeneficiary,
-        address newBeneficiary
-    );
 
     struct BeneficiaryDetails {
         uint256 released;
         uint256 releasable;
-        uint256 percentage;
         uint256 totalReleasableToken;
         uint256 roundsPassed;
         uint256 lastReleasedAt;
@@ -77,7 +58,23 @@ contract TokenVesting is Ownable, ReentrancyGuard {
 
     address[] beneficiaries;
 
-    IERC20Mintable token;
+    IERC20Mintable immutable token;
+
+    event TokensReleasedForLinear(address beneficiary, uint256 amount);
+    event TokensReleasedForSAPD(address beneficiary, uint256 amount);
+    event BeneficiaryAdded(
+        address beneficiary,
+        uint256 released,
+        uint256 releasable,
+        bool haveSubWallets,
+        bool valid,
+        bool isSAPD
+    );
+    event BeneficiaryValidStatusUpdated(address beneficiary, bool valid);
+    event BeneficiaryAddressUpdated(
+        address oldBeneficiary,
+        address newBeneficiary
+    );
 
     modifier onlyNewBeneficiary(address _beneficiary) {
         require(
@@ -96,10 +93,10 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     }
 
     // Cannot allocate more than 100% of TOTAL_VESTING_TOKENS
-    modifier limitTokensAlloted(uint256 _percent) {
+    modifier limitTokensAlloted(uint256 _amount) {
         require(
-            percentTokensAlloted.add(_percent) <= 100,
-            "Tokens allocation percentage summing up more than 100%"
+            percentTokensAlloted.add(_amount) <= TOTAL_VESTING_TOKENS,
+            "Allocation amount's sum is more than total vesting tokens"
         );
         _;
     }
@@ -131,34 +128,29 @@ contract TokenVesting is Ownable, ReentrancyGuard {
 
     function addBeneficiary(
         address _beneficiary,
-        uint256 _percentage,
+        uint256 _amount,
         bool _haveSubWallets,
         bool _startFromNow,
         bool _isSAPD
     )
-        public
+        external
         onlyOwner
         onlyNewBeneficiary(_beneficiary)
-        limitTokensAlloted(_percentage)
+        limitTokensAlloted(_amount)
     {
         beneficiaries.push(_beneficiary);
         beneficiaryDetails[_beneficiary].valid = true;
-        beneficiaryDetails[_beneficiary].percentage = _percentage;
         beneficiaryDetails[_beneficiary].haveSubWallets = _haveSubWallets;
         beneficiaryDetails[_beneficiary].lastReleasedAt = _startFromNow
             ? block.timestamp
             : START_TIME;
         beneficiaryDetails[_beneficiary].isSAPD = _isSAPD;
-        beneficiaryDetails[_beneficiary]
-            .totalReleasableToken = TOTAL_VESTING_TOKENS.mul(_percentage).div(
-            100
-        );
+        beneficiaryDetails[_beneficiary].totalReleasableToken = _amount;
 
         emit BeneficiaryAdded(
             _beneficiary,
             0,
             beneficiaryDetails[_beneficiary].totalReleasableToken,
-            _percentage,
             _haveSubWallets,
             true,
             _isSAPD
@@ -221,7 +213,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     function addBeneficiarySubWallets(
         address _beneficiary,
         address[] memory _subWallets
-    ) public onlyOwner {
+    ) external onlyOwner {
         require(
             beneficiaryDetails[_beneficiary].haveSubWallets,
             "Beneficiary have no sub-wallets"
@@ -238,7 +230,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     }
 
     function updateSubWalletValidStatus(address _subWallet, bool _valid)
-        public
+        external
         onlyOwner
     {
         require(
@@ -268,32 +260,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         }
     }
 
-    function updateBeneficiaryPercentages(
-        address[] memory _beneficiaries,
-        uint256[] memory _newPercentages
-    ) public onlyOwner {
-        require(
-            _beneficiaries.length == _newPercentages.length,
-            "Unequal lengths of beneficiaries and new percentages"
-        );
-
-        for (uint256 i = 0; i < _beneficiaries.length; i++) {
-            percentTokensAlloted.sub(
-                beneficiaryDetails[_beneficiaries[i]].percentage
-            );
-            percentTokensAlloted.add(_newPercentages[i]);
-            beneficiaryDetails[_beneficiaries[i]].percentage = _newPercentages[
-                i
-            ];
-        }
-
-        require(
-            percentTokensAlloted <= 100,
-            "Tokens allocation percentage reaching above 100%"
-        );
-    }
-
-    function releaseLinearTokens(address _beneficiary) public nonReentrant {
+    function releaseLinearTokens(address _beneficiary) external {
         // Either owner or the beneficiary themselves can release their tokens
         // In case of owner, get the beneficiary from argument else msg.sender
         require(
@@ -327,7 +294,7 @@ contract TokenVesting is Ownable, ReentrancyGuard {
         address beneficiary,
         uint256 currentTokenPrice,
         uint256 avgTokenPrice
-    ) public onlySAPDOfficer nonReentrant {
+    ) external onlySAPDOfficer {
         require(
             beneficiaryDetails[beneficiary].isSAPD,
             "Beneficiary does not follow SAPD"
@@ -390,15 +357,17 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     }
 
     // Release subwallet tokens after calling releaseSAPDTokens or releaseLinearTokens
-    function releaseSubwalletTokens(address _beneficiary) public nonReentrant {
+    function releaseSubwalletTokens(address _beneficiary) external {
         // Either owner or the beneficiary themselves can release their tokens
         // In case of owner, get the beneficiary from argument else msg.sender
-
         address beneficiary = msg.sender == owner() ? _beneficiary : msg.sender;
         (uint256 releasableTokens, ) = getReleasableTokens(beneficiary);
 
         require(beneficiaryDetails[beneficiary].valid, "Invalid beneficiary");
-
+        require(
+            beneficiaryDetails[beneficiary].toReleaseSubWallets,
+            "Subwallet tokens were already released"
+        );
         require(
             beneficiaryDetails[beneficiary].haveSubWallets,
             "Beneficiary does not have any subwallets"
@@ -424,6 +393,61 @@ contract TokenVesting is Ownable, ReentrancyGuard {
     }
 
     // ====== GETTERS =======
+
+    function getBeneficiaryDetails(address _beneficiary)
+        external
+        view
+        returns (
+            uint256 _released,
+            uint256 _releasable,
+            uint256 _roundsPassed,
+            uint256 _lastReleasedAt,
+            uint256 _previousRoundTokens,
+            uint256 _totalReleasableToken,
+            bool _haveSubWallets,
+            bool _valid,
+            bool _isSAPD
+        )
+    {
+        BeneficiaryDetails memory details = beneficiaryDetails[_beneficiary];
+        (details.releasable, ) = getReleasableTokens(_beneficiary);
+
+        _released = details.released;
+        _releasable = details.releasable;
+        _roundsPassed = details.roundsPassed;
+        _lastReleasedAt = details.lastReleasedAt;
+        _previousRoundTokens = details.previousRoundTokens;
+        _totalReleasableToken = details.totalReleasableToken;
+        _haveSubWallets = details.haveSubWallets;
+        _valid = details.valid;
+        _isSAPD = details.isSAPD;
+    }
+
+    function getAllBeneficiaryDetails()
+        external
+        view
+        returns (BeneficiaryDetails[] memory _details)
+    {
+        for (uint256 i = 0; i < beneficiaries.length; i++) {
+            BeneficiaryDetails memory details = beneficiaryDetails[
+                beneficiaries[i]
+            ];
+            (details.releasable, ) = getReleasableTokens(beneficiaries[i]);
+            _details[i] = details;
+        }
+    }
+
+    function getBeneficiaries() external view returns (address[] memory) {
+        return beneficiaries;
+    }
+
+    function getBeneficiarySubWallets(address _beneficiary)
+        external
+        view
+        returns (address[] memory)
+    {
+        return beneficiarySubWallets[_beneficiary];
+    }
 
     function getReleasableTokens(address _for)
         public
@@ -461,63 +485,6 @@ contract TokenVesting is Ownable, ReentrancyGuard {
             _amount = 0;
             _rounds = 0;
         }
-    }
-
-    function getBeneficiaryDetails(address _beneficiary)
-        public
-        view
-        returns (
-            uint256 _released,
-            uint256 _releasable,
-            uint256 _percentage,
-            uint256 _roundsPassed,
-            uint256 _lastReleasedAt,
-            uint256 _previousRoundTokens,
-            uint256 _totalReleasableToken,
-            bool _haveSubWallets,
-            bool _valid,
-            bool _isSAPD
-        )
-    {
-        BeneficiaryDetails memory details = beneficiaryDetails[_beneficiary];
-        (details.releasable, ) = getReleasableTokens(_beneficiary);
-
-        _released = details.released;
-        _releasable = details.releasable;
-        _percentage = details.percentage;
-        _roundsPassed = details.roundsPassed;
-        _lastReleasedAt = details.lastReleasedAt;
-        _previousRoundTokens = details.previousRoundTokens;
-        _totalReleasableToken = details.totalReleasableToken;
-        _haveSubWallets = details.haveSubWallets;
-        _valid = details.valid;
-        _isSAPD = details.isSAPD;
-    }
-
-    function getAllBeneficiaryDetails()
-        public
-        view
-        returns (BeneficiaryDetails[] memory _details)
-    {
-        for (uint256 i = 0; i < beneficiaries.length; i++) {
-            BeneficiaryDetails memory details = beneficiaryDetails[
-                beneficiaries[i]
-            ];
-            (details.releasable, ) = getReleasableTokens(beneficiaries[i]);
-            _details[i] = details;
-        }
-    }
-
-    function getBeneficiaries() public view returns (address[] memory) {
-        return beneficiaries;
-    }
-
-    function getBeneficiarySubWallets(address _beneficiary)
-        public
-        view
-        returns (address[] memory)
-    {
-        return beneficiarySubWallets[_beneficiary];
     }
 
     // ====== PRIVATES =========

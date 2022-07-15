@@ -120,6 +120,46 @@ library UintSet {
 contract Stake is AccessControl, Pausable {
     using UintSet for Set;
 
+    struct PoolInfo {
+        uint256 startTime;
+        uint256 duration;
+        uint256 apy;
+        uint256 lockedLimit;
+        uint256 stakedAmount;
+        uint256 reserve;
+        uint256 promisedReward;
+    }
+
+    struct StakerInfo {
+        address parentStaker;
+        uint256 poolIndex;
+        uint256 startTime;
+        uint256 amount;
+        uint256 lastIndex;
+        uint256 reward;
+        bool isFinished;
+    }
+
+    mapping(address => mapping(uint256 => StakerInfo)) public stakers;
+    mapping(address => uint256) public currentStakerIndex;
+
+    // user address => pool index => total deposit amount
+    mapping(address => mapping(uint256 => uint256)) public amountByPool;
+
+    // Minumum amount the user can deposit in 1 pool.We will not look at the total amount deposited by the user into the pool.
+    uint256 public minStake;
+
+    // Maximum amount the user can deposit in 1 pool. We will look at the total amount the user deposited into the pool.
+    uint256 public maxStake;
+
+    // Pool Index => Pool Info
+    PoolInfo[] public pools;
+
+    IERC20 public immutable token;
+    uint256 private unlocked = 1;
+
+    address public immutable companyWallet;
+
     event RemovePool(uint256 poolIndex);
     event SetMinMax(uint256 minStake, uint256 maxStake);
     event PoolFunded(uint256 poolIndex, uint256 fundAmount);
@@ -170,46 +210,6 @@ contract Stake is AccessControl, Pausable {
         uint256 lockedLimit,
         uint256 promisedReward
     );
-
-    struct PoolInfo {
-        uint256 startTime;
-        uint256 duration;
-        uint256 apy;
-        uint256 lockedLimit;
-        uint256 stakedAmount;
-        uint256 reserve;
-        uint256 promisedReward;
-    }
-
-    struct StakerInfo {
-        address parentStaker;
-        uint256 poolIndex;
-        uint256 startTime;
-        uint256 amount;
-        uint256 lastIndex;
-        uint256 reward;
-        bool isFinished;
-    }
-
-    mapping(address => mapping(uint256 => StakerInfo)) public stakers;
-    mapping(address => uint256) public currentStakerIndex;
-
-    // user address => pool index => total deposit amount
-    mapping(address => mapping(uint256 => uint256)) public amountByPool;
-
-    // Minumum amount the user can deposit in 1 pool.We will not look at the total amount deposited by the user into the pool.
-    uint256 public minStake;
-
-    // Maximum amount the user can deposit in 1 pool. We will look at the total amount the user deposited into the pool.
-    uint256 public maxStake;
-
-    // Pool Index => Pool Info
-    PoolInfo[] public pools;
-
-    IERC20 public immutable token;
-    uint256 private unlocked = 1;
-
-    address public immutable companyWallet;
 
     /**
      * @notice Checks if the pool exists
@@ -423,13 +423,6 @@ contract Stake is AccessControl, Pausable {
         lock
         isPoolExist(_poolIndex)
     {
-        uint256 index = currentStakerIndex[msg.sender];
-        StakerInfo storage staker = stakers[msg.sender][index];
-        PoolInfo storage pool = pools[_poolIndex];
-        uint256 reward = calculateRew(_amount, pool.apy, pool.duration);
-        uint256 totStakedAmount = pool.stakedAmount + _amount;
-        pool.promisedReward += reward;
-
         require(
             _amount >= minStake,
             "deposit: You cannot deposit below the minimum amount."
@@ -440,20 +433,28 @@ contract Stake is AccessControl, Pausable {
             "deposit: You cannot deposit, have reached the maximum deposit amount."
         );
 
-        // Check if the pool has enough reserve to give out the rewards including this staker's
-        require(
-            pool.reserve >= pool.promisedReward,
-            "deposit: This pool does not have enough reward reserve"
-        );
+        uint256 index = currentStakerIndex[msg.sender];
+        StakerInfo storage staker = stakers[msg.sender][index];
+        PoolInfo storage pool = pools[_poolIndex];
+        uint256 reward = calculateRew(_amount, pool.apy, pool.duration);
+        uint256 totStakedAmount = pool.stakedAmount + _amount;
+
         require(
             pool.lockedLimit >= totStakedAmount,
             "deposit: The pool has reached its maximum capacity."
         );
-
         require(
             block.timestamp >= pool.startTime,
             "deposit: This pool hasn't started yet."
         );
+
+        // Check if the pool has enough reserve to give out the rewards including this staker's
+        require(
+            pool.reserve >= (pool.promisedReward + reward),
+            "deposit: This pool does not have enough reward reserve"
+        );
+
+        pool.promisedReward += reward;
 
         uint256 duration = pool.duration;
         uint256 timestamp = block.timestamp;
@@ -493,13 +494,9 @@ contract Stake is AccessControl, Pausable {
         isPoolExist(_poolIndex)
     {
         uint256 index = currentStakerIndex[_staker];
-        StakerInfo storage staker = stakers[_staker][index];
-        staker.parentStaker = msg.sender;
-
         PoolInfo storage pool = pools[_poolIndex];
         uint256 reward = calculateRew(_amount, pool.apy, pool.duration);
         uint256 totStakedAmount = pool.stakedAmount + _amount;
-        pool.promisedReward += reward;
 
         require(
             _amount >= minStake,
@@ -511,18 +508,22 @@ contract Stake is AccessControl, Pausable {
             "deposit: You cannot deposit, have reached the maximum deposit amount."
         );
         require(
-            pool.reserve >= pool.promisedReward,
+            pool.reserve >= (pool.promisedReward + reward),
             "deposit: This pool does not have enough reward reserve"
         );
         require(
             pool.lockedLimit >= totStakedAmount,
             "deposit: The pool has reached its maximum capacity."
         );
-
         require(
             block.timestamp >= pool.startTime,
             "deposit: This pool hasn't started yet."
         );
+
+        StakerInfo storage staker = stakers[_staker][index];
+        staker.parentStaker = msg.sender;
+
+        pool.promisedReward += reward;
 
         uint256 duration = pool.duration;
         uint256 timestamp = block.timestamp;
@@ -625,7 +626,9 @@ contract Stake is AccessControl, Pausable {
         isNotFinished(msg.sender, _stakerIndex)
     {
         StakerInfo storage staker = stakers[msg.sender][_stakerIndex];
-        address withdrawingAddress = staker.parentStaker == address(0) ? msg.sender : staker.parentStaker;
+        address withdrawingAddress = staker.parentStaker == address(0)
+            ? msg.sender
+            : staker.parentStaker;
 
         PoolInfo storage pool = pools[staker.poolIndex];
 
@@ -665,7 +668,12 @@ contract Stake is AccessControl, Pausable {
         pool.stakedAmount -= staker.amount;
         amountByPool[msg.sender][staker.poolIndex] -= staker.amount;
 
-        _transferAndRemove(withdrawingAddress, totalWithdraw, msg.sender, _stakerIndex);
+        _transferAndRemove(
+            withdrawingAddress,
+            totalWithdraw,
+            msg.sender,
+            _stakerIndex
+        );
 
         emit Withdraw(
             msg.sender,
@@ -702,12 +710,7 @@ contract Stake is AccessControl, Pausable {
         uint256 duration = _getStakerDuration(closedTime, staker.startTime);
         uint256 reward = calculateRew(staker.amount, pool.apy, duration);
         uint256 totalDeposit = staker.amount + reward;
-        uint256 promisedReward = calculateRew(
-            totalDeposit,
-            pool.apy,
-            pool.duration
-        );
-        pool.promisedReward += promisedReward;
+
         // we are checking only reward because staker amount currently staked.
         require(
             pool.reserve >=
@@ -716,13 +719,20 @@ contract Stake is AccessControl, Pausable {
                     pool.apy,
                     pool.duration
                 ),
-            "restake: This pool has no enough reward reserve"
+            "restake: This pool does not have enough reward reserve"
         );
 
         require(
             (amountByPool[msg.sender][poolIndex] + reward) <= maxStake,
             "restake: You cannot deposit, have reached the maximum deposit amount."
         );
+
+        uint256 promisedReward = calculateRew(
+            totalDeposit,
+            pool.apy,
+            pool.duration
+        );
+        pool.promisedReward += promisedReward;
 
         pool.stakedAmount += reward;
         staker.startTime = block.timestamp;
@@ -742,7 +752,9 @@ contract Stake is AccessControl, Pausable {
         isNotFinished(msg.sender, _stakerIndex)
     {
         StakerInfo memory staker = stakers[msg.sender][_stakerIndex];
-        address withdrawingAddress = staker.parentStaker == address(0) ? msg.sender : staker.parentStaker;
+        address withdrawingAddress = staker.parentStaker == address(0)
+            ? msg.sender
+            : staker.parentStaker;
 
         PoolInfo storage pool = pools[staker.poolIndex];
 
@@ -756,7 +768,12 @@ contract Stake is AccessControl, Pausable {
             pool.duration
         );
         amountByPool[msg.sender][staker.poolIndex] -= withdrawAmount;
-        _transferAndRemove(withdrawingAddress, withdrawAmount, msg.sender, _stakerIndex);
+        _transferAndRemove(
+            withdrawingAddress,
+            withdrawAmount,
+            msg.sender,
+            _stakerIndex
+        );
         emit EmergencyWithdraw(
             msg.sender,
             withdrawAmount,
@@ -764,23 +781,6 @@ contract Stake is AccessControl, Pausable {
             staker.poolIndex,
             _stakerIndex
         );
-    }
-
-    /**
-     * Calculates the current reward of the user whose address and index are given.
-     * @param _amount amount of deposit.
-     * @param _apy monthly rate.
-     * @param _duration amount of time spent inside.
-     * @return reward amount of earned by the user.
-     */
-    function calculateRew(
-        uint256 _amount,
-        uint256 _apy,
-        uint256 _duration
-    ) public pure returns (uint256) {
-        uint256 rateToSec = (_apy * 1e36) / 30 days;
-        uint256 percent = (rateToSec * _duration) / 1e18;
-        return (_amount * percent) / 1e36;
     }
 
     /**
@@ -811,19 +811,6 @@ contract Stake is AccessControl, Pausable {
         futureReward = calculateRew(staker.amount, pool.apy, pool.duration);
 
         return (reward, closedTime, futureReward, staker);
-    }
-
-    function getClosedTime(address _staker, uint256 _stakerIndex)
-        public
-        view
-        returns (uint256)
-    {
-        StakerInfo memory staker = stakers[_staker][_stakerIndex];
-        PoolInfo memory pool = pools[staker.poolIndex];
-
-        uint256 closedTime = staker.startTime + pool.duration;
-
-        return closedTime;
     }
 
     /**
@@ -863,6 +850,36 @@ contract Stake is AccessControl, Pausable {
         }
 
         return (totStakedAmount, totAlloc);
+    }
+
+    /**
+     * Calculates the current reward of the user whose address and index are given.
+     * @param _amount amount of deposit.
+     * @param _apy monthly rate.
+     * @param _duration amount of time spent inside.
+     * @return reward amount of earned by the user.
+     */
+    function calculateRew(
+        uint256 _amount,
+        uint256 _apy,
+        uint256 _duration
+    ) public pure returns (uint256) {
+        uint256 rateToSec = (_apy * 1e36) / 30 days;
+        uint256 percent = (rateToSec * _duration) / 1e18;
+        return (_amount * percent) / 1e36;
+    }
+
+    function getClosedTime(address _staker, uint256 _stakerIndex)
+        public
+        view
+        returns (uint256)
+    {
+        StakerInfo memory staker = stakers[_staker][_stakerIndex];
+        PoolInfo memory pool = pools[staker.poolIndex];
+
+        uint256 closedTime = staker.startTime + pool.duration;
+
+        return closedTime;
     }
 
     function _getStakerDuration(uint256 _closedTime, uint256 _startTime)
