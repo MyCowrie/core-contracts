@@ -3,6 +3,7 @@ pragma solidity 0.8.15;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
 
 interface IERC20Mintable is IERC20Metadata {
     function mint(address _account, uint256 _amount) external;
@@ -12,10 +13,10 @@ contract TokenVesting is Ownable {
     struct BeneficiaryDetails {
         uint256 released;
         uint256 releasable;
-        uint256 totalReleasableToken;
+        uint256 totalReleasableToken; // Total tokens vested for this beneficiary(for complete vesting period)
         uint256 roundsPassed;
         uint256 lastReleasedAt;
-        uint256 previousRoundTokens;
+        uint256 previousRoundTokens; // For SAPD Vesting
         bool haveSubWallets;
         bool toReleaseSubWallets;
         bool valid;
@@ -33,20 +34,44 @@ contract TokenVesting is Ownable {
         uint256 negativeRangeReleasePercent;
     }
 
+    struct NFTVestingDetails {
+        uint256 released;
+        uint256 releasable;
+        uint256 totalReleasableToken; // Total tokens vested in complete vesting period
+        uint256 roundsPassed;
+        uint256 lastReleasedAt;
+        bool valid;
+    }
+
+    struct NFTVestingDetailsInput {
+        uint256 tokenId;
+        uint256 amount;
+        bool startFromNow;
+    }
+
+    // Limit of total COWRIEs to be vested
     uint256 public immutable TOTAL_VESTING_TOKENS;
+
     uint256 public immutable START_TIME;
+    IERC20Mintable public immutable token;
 
     uint256 public constant VESTING_DURATION = 365 days; // 1 year
     uint256 public constant TOTAL_ROUNDS = 27; // 27 years
 
     uint256 public lastMarkedPrice;
     uint256 public totalReleasedTokens;
-    uint256 public percentTokensAlloted;
+
+    // To keep track of amount of tokens vested
+    uint256 public totalTokensVested;
 
     address public sapdOfficerAddress;
+    IERC721Enumerable public nft;
 
     mapping(address => BeneficiaryDetails) _beneficiaryDetails;
     mapping(address => SubWalletDetails) _beneficiarySubWalletDetails;
+
+    // Token id => Its Vesting details
+    mapping(uint256 => NFTVestingDetails) _nftVestingDetails;
 
     // Beneficiary => List of sub-wallets
     mapping(address => address[]) _beneficiarySubWallets;
@@ -55,10 +80,13 @@ contract TokenVesting is Ownable {
 
     address[] _beneficiaries;
 
-    IERC20Mintable immutable _token;
-
     event TokensReleasedForLinear(address beneficiary, uint256 amount);
     event TokensReleasedForSAPD(address beneficiary, uint256 amount);
+    event TokensReleasedForNFT(
+        address nftOwner,
+        uint256 tokenId,
+        uint256 amount
+    );
     event BeneficiaryAdded(
         address beneficiary,
         uint256 released,
@@ -66,6 +94,12 @@ contract TokenVesting is Ownable {
         bool haveSubWallets,
         bool valid,
         bool isSAPD
+    );
+    event NFTVestingAdded(
+        uint256 tokenId,
+        uint256 released,
+        uint256 releasable,
+        bool valid
     );
     event BeneficiaryValidStatusUpdated(address beneficiary, bool valid);
     event BeneficiaryAddressUpdated(
@@ -89,11 +123,11 @@ contract TokenVesting is Ownable {
         _;
     }
 
-    // Cannot allocate more than 100% of TOTAL_VESTING_TOKENS
+    // Cannot allocate more than TOTAL_VESTING_TOKENS
     modifier limitTokensAlloted(uint256 _amount) {
         require(
-            percentTokensAlloted + _amount <= TOTAL_VESTING_TOKENS,
-            "Allocation amount's sum is more than total vesting tokens"
+            totalTokensVested + _amount <= TOTAL_VESTING_TOKENS,
+            "Total vesting amount cannot be more than the limit"
         );
         _;
     }
@@ -103,7 +137,7 @@ contract TokenVesting is Ownable {
         uint256 _lastMarkedPrice,
         uint256 _totalVestingTokens
     ) {
-        _token = IERC20Mintable(_tokenAddr);
+        token = IERC20Mintable(_tokenAddr);
         TOTAL_VESTING_TOKENS = _totalVestingTokens;
         START_TIME = block.timestamp;
         lastMarkedPrice = _lastMarkedPrice;
@@ -121,6 +155,10 @@ contract TokenVesting is Ownable {
         onlyOwner
     {
         sapdOfficerAddress = _newSAPDOfficer;
+    }
+
+    function setNFTAddress(address _nftAddress) external onlyOwner {
+        nft = IERC721Enumerable(_nftAddress);
     }
 
     function addBeneficiary(
@@ -144,6 +182,7 @@ contract TokenVesting is Ownable {
         _beneficiaryDetails[_beneficiary].isSAPD = _isSAPD;
         _beneficiaryDetails[_beneficiary].totalReleasableToken = _amount;
 
+        totalTokensVested += _amount;
         emit BeneficiaryAdded(
             _beneficiary,
             0,
@@ -152,6 +191,27 @@ contract TokenVesting is Ownable {
             true,
             _isSAPD
         );
+    }
+
+    // Not using limitTokensAlloted(_amount)
+    // Since only owner can call the function, will make sure that amount is not over limit
+    function addNFTForVestingInBatch(
+        NFTVestingDetailsInput[] calldata _vestingDetails
+    ) external onlyOwner {
+        for (uint256 i; i < _vestingDetails.length; i++) {
+            NFTVestingDetailsInput memory _details = _vestingDetails[i];
+
+            _nftVestingDetails[_details.tokenId].valid = true;
+            _nftVestingDetails[_details.tokenId].lastReleasedAt = _details
+                .startFromNow
+                ? block.timestamp
+                : START_TIME;
+            _nftVestingDetails[_details.tokenId].totalReleasableToken = _details
+                .amount;
+
+            totalTokensVested += _details.amount;
+            emit NFTVestingAdded(_details.tokenId, 0, _details.amount, true);
+        }
     }
 
     function updateBeneficiaryValidStatus(address _beneficiary, bool _isValid)
@@ -209,7 +269,7 @@ contract TokenVesting is Ownable {
 
     function addBeneficiarySubWallets(
         address _beneficiary,
-        address[] memory _subWallets
+        address[] calldata _subWallets
     ) external onlyOwner {
         require(
             _beneficiaryDetails[_beneficiary].haveSubWallets,
@@ -278,7 +338,7 @@ contract TokenVesting is Ownable {
             // must call releaseSubWalletTokens after this
             _beneficiaryDetails[beneficiary].toReleaseSubWallets = true;
         } else {
-            _token.mint(beneficiary, releasableTokens);
+            token.mint(beneficiary, releasableTokens);
         }
 
         _beneficiaryDetails[beneficiary].released += releasableTokens;
@@ -340,7 +400,7 @@ contract TokenVesting is Ownable {
             // must call releaseSubWalletTokens after this
             _beneficiaryDetails[beneficiary].toReleaseSubWallets = true;
         } else {
-            _token.mint(beneficiary, sapdReleasableTokens);
+            token.mint(beneficiary, sapdReleasableTokens);
         }
 
         _beneficiaryDetails[beneficiary].previousRoundTokens =
@@ -382,7 +442,7 @@ contract TokenVesting is Ownable {
             i < _beneficiarySubWallets[beneficiary].length;
             i++
         ) {
-            _token.mint(
+            token.mint(
                 _beneficiarySubWallets[beneficiary][i],
                 subWalletTokens
             );
@@ -390,6 +450,22 @@ contract TokenVesting is Ownable {
 
         _beneficiaryDetails[beneficiary].releasable = 0;
         _beneficiaryDetails[beneficiary].toReleaseSubWallets = false;
+    }
+
+    function releaseNFTVestedTokensByOwner(
+        address _nftOwner,
+        uint256 _tokenId
+    ) external {
+        require(
+            nft.ownerOf(_tokenId) == _nftOwner,
+            "Token id is not owned by this owner"
+        );
+
+        _releaseNFTVestedTokens(_tokenId, _nftOwner);
+    }
+
+    function releaseNFTVestedTokensByTokenId(uint256 _tokenId) external {
+        _releaseNFTVestedTokens(_tokenId, nft.ownerOf(_tokenId));
     }
 
     // ====== GETTERS =======
@@ -449,6 +525,29 @@ contract TokenVesting is Ownable {
         return _beneficiarySubWallets[_beneficiary];
     }
 
+    function getNFTVestingDetails(uint256 _tokenId)
+        external
+        view
+        returns (
+            uint256 _released,
+            uint256 _releasable,
+            uint256 _totalReleasableToken,
+            uint256 _roundsPassed,
+            uint256 _lastReleasedAt,
+            bool _valid
+        )
+    {
+        NFTVestingDetails memory details = _nftVestingDetails[_tokenId];
+        (details.releasable, ) = getReleasableTokensForNFT(_tokenId);
+
+        _released = details.released;
+        _releasable = details.releasable;
+        _roundsPassed = details.roundsPassed;
+        _lastReleasedAt = details.lastReleasedAt;
+        _totalReleasableToken = details.totalReleasableToken;
+        _valid = details.valid;
+    }
+
     function getReleasableTokens(address _for)
         public
         view
@@ -458,25 +557,79 @@ contract TokenVesting is Ownable {
             _beneficiaryDetails[_for].valid &&
             _beneficiaryDetails[_for].roundsPassed < TOTAL_ROUNDS
         ) {
-            uint256 durationPassed = block.timestamp -
+            uint256 durationPassedSinceLastRelease = block.timestamp -
                 _beneficiaryDetails[_for].lastReleasedAt;
-            uint256 roundsPassed = durationPassed / VESTING_DURATION;
+            uint256 roundsPassedSinceLastRelease = durationPassedSinceLastRelease /
+                    VESTING_DURATION;
 
             // Total rounds passed for this beneficiary including this period
-            uint256 totalRoundsPassed = roundsPassed +
+            uint256 totalRoundsPassed = roundsPassedSinceLastRelease +
                 _beneficiaryDetails[_for].roundsPassed;
+
             // Rounding off number of rounds passed since last release to not add up greater than TOTAL_ROUNDS
-            uint256 moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS;
-            roundsPassed = roundsPassed - moreThanLimitRounds;
+            uint256 moreThanLimitRounds = 0;
+            if (TOTAL_ROUNDS < totalRoundsPassed) {
+                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS;
+            }
+
+            roundsPassedSinceLastRelease =
+                roundsPassedSinceLastRelease -
+                moreThanLimitRounds;
 
             // Number of tokens to be vested for this account
             uint256 totalReleasableTokens = _beneficiaryDetails[_for]
                 .totalReleasableToken;
 
             // Number of tokens vested till now for this role
-            _amount = (totalReleasableTokens * roundsPassed) / TOTAL_ROUNDS;
+            _amount =
+                (totalReleasableTokens * roundsPassedSinceLastRelease) /
+                TOTAL_ROUNDS;
 
-            _rounds = roundsPassed;
+            _rounds = roundsPassedSinceLastRelease;
+        } else {
+            _amount = 0;
+            _rounds = 0;
+        }
+    }
+
+    function getReleasableTokensForNFT(uint256 _tokenId)
+        public
+        view
+        returns (uint256 _amount, uint256 _rounds)
+    {
+        if (
+            _nftVestingDetails[_tokenId].valid &&
+            _nftVestingDetails[_tokenId].roundsPassed < TOTAL_ROUNDS
+        ) {
+            uint256 durationPassedSinceLastRelease = block.timestamp -
+                _nftVestingDetails[_tokenId].lastReleasedAt;
+            uint256 roundsPassedSinceLastRelease = durationPassedSinceLastRelease /
+                    VESTING_DURATION;
+
+            // Total rounds passed for this beneficiary including this period
+            uint256 totalRoundsPassed = roundsPassedSinceLastRelease +
+                _nftVestingDetails[_tokenId].roundsPassed;
+
+            // Rounding off number of rounds passed since last release to not add up greater than TOTAL_ROUNDS
+            uint256 moreThanLimitRounds = 0;
+            if (TOTAL_ROUNDS < totalRoundsPassed) {
+                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS;
+            }
+
+            roundsPassedSinceLastRelease =
+                roundsPassedSinceLastRelease -
+                moreThanLimitRounds;
+
+            // Number of tokens to be vested for this account
+            uint256 totalReleasableTokens = _nftVestingDetails[_tokenId]
+                .totalReleasableToken;
+
+            // Number of tokens vested till now for this role
+            _amount =
+                (totalReleasableTokens * roundsPassedSinceLastRelease) /
+                TOTAL_ROUNDS;
+
+            _rounds = roundsPassedSinceLastRelease;
         } else {
             _amount = 0;
             _rounds = 0;
@@ -484,6 +637,31 @@ contract TokenVesting is Ownable {
     }
 
     // ====== PRIVATES =========
+
+    function _releaseNFTVestedTokens(uint256 _tokenId, address _nftOwner)
+        private
+    {
+        require(
+            _nftOwner != address(0),
+            "Cannot release vested tokens for zero address"
+        );
+
+        (
+            uint256 releasableTokens,
+            uint256 roundsCovered
+        ) = getReleasableTokensForNFT(_tokenId);
+        require(releasableTokens > 0, "Zero releasable tokens found");
+
+        _nftVestingDetails[_tokenId].roundsPassed += roundsCovered;
+        _nftVestingDetails[_tokenId].lastReleasedAt = block.timestamp;
+
+        token.mint(_nftOwner, releasableTokens);
+
+        _nftVestingDetails[_tokenId].released += releasableTokens;
+        totalReleasedTokens += releasableTokens;
+
+        emit TokensReleasedForNFT(_nftOwner, _tokenId, releasableTokens);
+    }
 
     function _addReleaseRange(
         uint256 startRange,
