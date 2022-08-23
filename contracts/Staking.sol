@@ -146,17 +146,19 @@ contract Stake is AccessControl, Pausable {
     // user address => pool index => total deposit amount
     mapping(address => mapping(uint256 => uint256)) public amountByPool;
 
-    // Minumum amount the user can deposit in 1 pool.We will not look at the total amount deposited by the user into the pool.
+    // Minimum amount the user can deposit in 1 pool.
+    // We will not look at the total amount deposited by the user into the pool.
     uint256 public minStake;
 
-    // Maximum amount the user can deposit in 1 pool. We will look at the total amount the user deposited into the pool.
+    // Maximum amount the user can deposit in 1 pool.
+    // We will look at the total amount the user deposited into the pool.
     uint256 public maxStake;
 
     // Pool Index => Pool Info
     PoolInfo[] public pools;
 
     IERC20 public immutable token;
-    uint256 private unlocked = 1;
+    uint256 private _unlocked = 1;
 
     address public immutable companyWallet;
 
@@ -250,10 +252,10 @@ contract Stake is AccessControl, Pausable {
     }
 
     modifier lock() {
-        require(unlocked == 1, "FixStaking: LOCKED");
-        unlocked = 0;
+        require(_unlocked == 1, "FixStaking: LOCKED");
+        _unlocked = 0;
         _;
-        unlocked = 1;
+        _unlocked = 1;
     }
 
     constructor(address _token, address _companyWallet) {
@@ -408,7 +410,8 @@ contract Stake is AccessControl, Pausable {
 
     /**
      * Users can deposit money into any pool they want.
-     * @notice Each time the user makes a deposit, the staker is kept at a different stakerIndex so it can be in more than one or the same pool at the same time.
+     * @notice Each time the user makes a deposit, the staker is kept at a different
+     *  stakerIndex so it can be in more than one or the same pool at the same time.
      * @notice Users can join the same pool more than once at the same time.
      * @notice Users can join different pools at the same time.
      * @param _amount amount of money to be deposited.
@@ -610,7 +613,8 @@ contract Stake is AccessControl, Pausable {
 
     /**
      * Users can exit the period they are in at any time.
-     * @notice Users who are not penalized can withdraw their money directly with this function. Users who are penalized should execut the claimPending function after this process.
+     * @notice Users who are not penalized can withdraw their money directly with this function.
+     *  Users who are penalized should execut the claimPending function after this process.
      * @notice If the period has not finished, they will be penalized at the rate of mainPeanltyRate from their deposit.
      * @notice If the period has not finished, they will be penalized at the rate of subPenaltyRate from their rewards.
      * @notice Penalized users will be able to collect their rewards later with the claim function.
@@ -835,7 +839,8 @@ contract Stake is AccessControl, Pausable {
 
     /**
      * Returns the total staked amount and remaining allocation all pools.
-     * @notice We are aware of the gas problem that will occur with the for loop here. This won't be a problem as we won't have more than 10-20 pools.
+     * @notice We are aware of the gas problem that will occur with the for loop here.
+     *  This won't be a problem as we won't have more than 10-20 pools.
      */
     function getTotStakedAndAlloc()
         external
@@ -850,6 +855,19 @@ contract Stake is AccessControl, Pausable {
         }
 
         return (totStakedAmount, totAlloc);
+    }
+
+    function getClosedTime(address _staker, uint256 _stakerIndex)
+        public
+        view
+        returns (uint256)
+    {
+        StakerInfo memory staker = stakers[_staker][_stakerIndex];
+        PoolInfo memory pool = pools[staker.poolIndex];
+
+        uint256 closedTime = staker.startTime + pool.duration;
+
+        return closedTime;
     }
 
     /**
@@ -869,32 +887,6 @@ contract Stake is AccessControl, Pausable {
         return (_amount * percent) / 1e36;
     }
 
-    function getClosedTime(address _staker, uint256 _stakerIndex)
-        public
-        view
-        returns (uint256)
-    {
-        StakerInfo memory staker = stakers[_staker][_stakerIndex];
-        PoolInfo memory pool = pools[staker.poolIndex];
-
-        uint256 closedTime = staker.startTime + pool.duration;
-
-        return closedTime;
-    }
-
-    function _getStakerDuration(uint256 _closedTime, uint256 _startTime)
-        private
-        view
-        returns (uint256)
-    {
-        uint256 endTime = block.timestamp > _closedTime
-            ? _closedTime
-            : block.timestamp;
-        uint256 duration = endTime - _startTime;
-
-        return duration;
-    }
-
     function _transferAndRemove(
         address _user,
         uint256 _transferAmount,
@@ -908,5 +900,18 @@ contract Stake is AccessControl, Pausable {
         );
 
         staker.isFinished = true;
+    }
+
+    function _getStakerDuration(uint256 _closedTime, uint256 _startTime)
+        private
+        view
+        returns (uint256)
+    {
+        uint256 endTime = block.timestamp > _closedTime
+            ? _closedTime
+            : block.timestamp;
+        uint256 duration = endTime - _startTime;
+
+        return duration;
     }
 }

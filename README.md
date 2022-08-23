@@ -2,9 +2,8 @@
 Cowrie core contracts. Including ERC20 token, Staking and Vesting.
 
 ## Setup
-The project is built using the [Truffle](https://trufflesuite.com/docs/truffle/) framework. Following are the steps to setup the project to compile and deploy the contracts.
 
-1. Setup **Truffle** globally
+1. Setup **[Truffle](https://trufflesuite.com/docs/truffle/)** globally
 
     `npm install -g truffle`
 
@@ -12,38 +11,66 @@ The project is built using the [Truffle](https://trufflesuite.com/docs/truffle/)
 
     `npm install`
 
-3. Next, to **flatten** our contract files.
-    
-    -  Run the flattener from the root of project
-    
-        `truffle-flattener contracts/<contract name>.sol > <output file name>.sol`
-    
-    - The flattened files can be found in root directory of project.
+3. Install **[ganache cli](https://www.npmjs.com/package/ganache)** globally
 
-4. Next, to deploy the contracts, we are using [Remix IDE](https://remix.ethereum.org/)
-    
-    - Copy or upload the flattened file on Remix IDE.
+    `npm i -g ganache`
 
-    - Setup the compiler with following settings
+## Deployment
 
-        - Compiler version `0.8.15+commit.e14f2714`
-        - Language `Solidity`
-        - EVM Version `default`
-        - Check `Enable Optimization` and set it to `200`
+<details open>
+    <summary>Truffle way</summary>
 
-    - Compile the contract file and verify that there are no breaking errors.
+  1. Copy `.env.example` file and rename it to `.env`
 
-    - In the environment section, select your connected wallet.
+        `mv .env.example .env`
 
-    - Then under contract section, select appropriate contract to be deployed.
+  2. Set the value of variables mentioned in `.env` file.
 
-    - Then click `Deploy` after inputting the appropriate arguments to the constructor.
+  3. Start `ganache cli` for local deployment and testing.
+
+  4. At last, run following command to deploy the contracts
+
+        `truffle migrate --network <network name>`
+</details>
+
+<details>
+    <summary>Or using Remix IDE</summary>
+
+  1. Next, to **flatten** our contract files.
+
+      - Run the flattener from the root of project
+
+          `truffle-flattener contracts/<contract name>.sol > <output file name>.sol`
+
+      - The flattened files can be found in root directory of project.
+
+  2. Next, to deploy the contracts, we are using [Remix IDE](https://remix.ethereum.org/)
+
+      - Copy or upload the flattened file on Remix IDE.
+
+      - Setup the compiler with following settings
+
+          - Compiler version `0.8.15+commit.e14f2714`
+          - Language `Solidity`
+          - EVM Version `default`
+          - Check `Enable Optimization` and set it to `200`
+
+      - Compile the contract file and verify that there are no breaking errors.
+
+      - In the environment section, select your connected wallet.
+
+      - Then under contract section, select appropriate contract to be deployed.
+
+      - Then click `Deploy` after inputting the appropriate arguments to the constructor.
+</details>
+
+<br>
 
 ## Mainnet Contracts
 - COWRIE Token BSC `0xde51d1599339809cafb8194189ce67d5bdca9e9e`
 - Staking Contract BSC `0x6191a038155f47ac5c3717f15e62aacd294fd4b4`
 
-<br></br>
+<br>
 
 # Technical Description
 
