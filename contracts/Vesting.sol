@@ -55,9 +55,6 @@ contract TokenVesting is Ownable {
     uint256 public immutable START_TIME;
     IERC20Mintable public immutable token;
 
-    uint256 public constant VESTING_DURATION = 365 days; // 1 year
-    uint256 public constant TOTAL_ROUNDS = 27; // 27 years
-
     uint256 public lastMarkedPrice;
     uint256 public totalReleasedTokens;
 
@@ -193,8 +190,6 @@ contract TokenVesting is Ownable {
         );
     }
 
-    // Not using limitTokensAlloted(_amount)
-    // Since only owner can call the function, will make sure that amount is not over limit
     function addNFTForVestingInBatch(
         NFTVestingDetailsInput[] calldata _vestingDetails
     ) external onlyOwner {
@@ -212,6 +207,11 @@ contract TokenVesting is Ownable {
             totalTokensVested += _details.amount;
             emit NFTVestingAdded(_details.tokenId, 0, _details.amount, true);
         }
+
+        require(
+            totalTokensVested <= TOTAL_VESTING_TOKENS,
+            "Total vesting amount cannot be more than the limit"
+        );
     }
 
     function updateBeneficiaryValidStatus(address _beneficiary, bool _isValid)
@@ -442,20 +442,16 @@ contract TokenVesting is Ownable {
             i < _beneficiarySubWallets[beneficiary].length;
             i++
         ) {
-            token.mint(
-                _beneficiarySubWallets[beneficiary][i],
-                subWalletTokens
-            );
+            token.mint(_beneficiarySubWallets[beneficiary][i], subWalletTokens);
         }
 
         _beneficiaryDetails[beneficiary].releasable = 0;
         _beneficiaryDetails[beneficiary].toReleaseSubWallets = false;
     }
 
-    function releaseNFTVestedTokensByOwner(
-        address _nftOwner,
-        uint256 _tokenId
-    ) external {
+    function releaseNFTVestedTokensByOwner(address _nftOwner, uint256 _tokenId)
+        external
+    {
         require(
             nft.ownerOf(_tokenId) == _nftOwner,
             "Token id is not owned by this owner"
@@ -555,12 +551,12 @@ contract TokenVesting is Ownable {
     {
         if (
             _beneficiaryDetails[_for].valid &&
-            _beneficiaryDetails[_for].roundsPassed < TOTAL_ROUNDS
+            _beneficiaryDetails[_for].roundsPassed < TOTAL_ROUNDS()
         ) {
             uint256 durationPassedSinceLastRelease = block.timestamp -
                 _beneficiaryDetails[_for].lastReleasedAt;
             uint256 roundsPassedSinceLastRelease = durationPassedSinceLastRelease /
-                    VESTING_DURATION;
+                    VESTING_DURATION();
 
             // Total rounds passed for this beneficiary including this period
             uint256 totalRoundsPassed = roundsPassedSinceLastRelease +
@@ -568,8 +564,8 @@ contract TokenVesting is Ownable {
 
             // Rounding off number of rounds passed since last release to not add up greater than TOTAL_ROUNDS
             uint256 moreThanLimitRounds = 0;
-            if (TOTAL_ROUNDS < totalRoundsPassed) {
-                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS;
+            if (TOTAL_ROUNDS() < totalRoundsPassed) {
+                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS();
             }
 
             roundsPassedSinceLastRelease =
@@ -583,7 +579,7 @@ contract TokenVesting is Ownable {
             // Number of tokens vested till now for this role
             _amount =
                 (totalReleasableTokens * roundsPassedSinceLastRelease) /
-                TOTAL_ROUNDS;
+                TOTAL_ROUNDS();
 
             _rounds = roundsPassedSinceLastRelease;
         } else {
@@ -599,12 +595,12 @@ contract TokenVesting is Ownable {
     {
         if (
             _nftVestingDetails[_tokenId].valid &&
-            _nftVestingDetails[_tokenId].roundsPassed < TOTAL_ROUNDS
+            _nftVestingDetails[_tokenId].roundsPassed < TOTAL_ROUNDS()
         ) {
             uint256 durationPassedSinceLastRelease = block.timestamp -
                 _nftVestingDetails[_tokenId].lastReleasedAt;
             uint256 roundsPassedSinceLastRelease = durationPassedSinceLastRelease /
-                    VESTING_DURATION;
+                    VESTING_DURATION();
 
             // Total rounds passed for this beneficiary including this period
             uint256 totalRoundsPassed = roundsPassedSinceLastRelease +
@@ -612,8 +608,8 @@ contract TokenVesting is Ownable {
 
             // Rounding off number of rounds passed since last release to not add up greater than TOTAL_ROUNDS
             uint256 moreThanLimitRounds = 0;
-            if (TOTAL_ROUNDS < totalRoundsPassed) {
-                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS;
+            if (TOTAL_ROUNDS() < totalRoundsPassed) {
+                moreThanLimitRounds = totalRoundsPassed - TOTAL_ROUNDS();
             }
 
             roundsPassedSinceLastRelease =
@@ -627,13 +623,21 @@ contract TokenVesting is Ownable {
             // Number of tokens vested till now for this role
             _amount =
                 (totalReleasableTokens * roundsPassedSinceLastRelease) /
-                TOTAL_ROUNDS;
+                TOTAL_ROUNDS();
 
             _rounds = roundsPassedSinceLastRelease;
         } else {
             _amount = 0;
             _rounds = 0;
         }
+    }
+
+    function VESTING_DURATION() public pure virtual returns (uint256) {
+        return 365 days;
+    }
+
+    function TOTAL_ROUNDS() public pure virtual returns (uint256) {
+        return 27;
     }
 
     // ====== PRIVATES =========
