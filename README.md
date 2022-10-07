@@ -66,9 +66,9 @@ Cowrie core contracts. Including ERC20 token, Staking and Vesting.
 
 <br>
 
-## Mainnet Contracts
-- COWRIE Token BSC `0xde51d1599339809cafb8194189ce67d5bdca9e9e`
-- Staking Contract BSC `0x6191a038155f47ac5c3717f15e62aacd294fd4b4`
+## Mainnet Contracts (Binance Smart Chain and Ethereum)
+- COWRIE Token `0xde51d1599339809cafb8194189ce67d5bdca9e9e`
+- Staking Contract `0x6191a038155f47ac5c3717f15e62aacd294fd4b4`
 
 <br>
 
