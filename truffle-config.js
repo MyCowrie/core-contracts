@@ -37,6 +37,15 @@ module.exports = {
       network_id: 5,
       chain_id: 5,
     },
+    bsc: { // Network name
+      provider: () =>
+        new HDWalletProvider({
+          privateKeys,
+          providerOrUrl: 'https://bsc-dataseed1.binance.org/',
+        }),
+      network_id: 56,
+      chain_id: 56,
+    },
     // custom_network: { // Network name
     //   provider: () =>
     //     new HDWalletProvider({

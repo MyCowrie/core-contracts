@@ -13,15 +13,15 @@ contract Token is ERC20Capped, Ownable {
     }
 
     /*
-        INITIAL SUPPLY:
-            ICO TOKENS: 137,327,459 + 46,664,000 = 183,991,459
-            INCLUDES 1ST YEAR-ON-YEAR VESTING
+        Total Supply Cap: 1,412,463,573
 
-        TOTAL SUPPLY CAP: 1,397,255,459
+        July 2022 total mint: 481 692 287.6
+        - 282 492 714,6 Staking 20% of total supply
+        - 199,199,573 (Vip: 183,991,459 + Reserve: 6,008,541 + 5% Referral comm: 9,199,573)
     */
     constructor(uint256 _initialSupply)
         ERC20("Cowrie", "COWRIE")
-        ERC20Capped(1397255459 * 10**decimals())
+        ERC20Capped(1412463573 * 10**decimals())
     {
         _mint(msg.sender, _initialSupply);
         // Call setVestingAddress function after deploying
