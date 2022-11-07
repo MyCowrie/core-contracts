@@ -66,16 +66,21 @@ Cowrie core contracts. Including ERC20 token, Staking and Vesting.
 
 <br>
 
-## Mainnet Contracts (Binance Smart Chain and Ethereum)
-- COWRIE Token `0xde51d1599339809cafb8194189ce67d5bdca9e9e`
-- Staking Contract `0x6191a038155f47ac5c3717f15e62aacd294fd4b4`
+## Mainnet Contracts
+### Binance Smart Chain
+- COWRIE Token [0xde51d1599339809cafb8194189ce67d5bdca9e9e](https://bscscan.com/token/0xde51d1599339809cafb8194189ce67d5bdca9e9e)
+- Staking Contract [0x6191a038155f47ac5c3717f15e62aacd294fd4b4](https://bscscan.com/address/0x6191a038155f47ac5c3717f15e62aacd294fd4b4)
+
+### Ethereum
+- COWRIE Token [0x136210a5c79d2435432e443f7155d9d83600ac70](https://etherscan.io/token/0x136210a5c79d2435432e443f7155d9d83600ac70)
+- Staking Contract [0x304e8c5cc5c33cd888cd58829d60bb4642ce91d9](https://etherscan.io/address/0x304e8c5cc5c33cd888cd58829d60bb4642ce91d9)
 
 <br>
 
 # Technical Description
 
 ## COWRIE Token
-The token is a simple BEP20 standard following contract. It has capped supply of **1,397,255,459** and can only be minted by the Vesting contract only throughout the vesting period and as long as the supply has reached the limit.
+The token is a simple ERC20 standard following contract. It has capped supply of **1,412,463,573** and can only be minted by the Vesting contract only throughout the vesting period and as long as the supply has reached the limit.
 
 ## Vesting
 Vesting is a certain number of Cowrie that are held aside for some period for the team, partners, advisors, and others who are contributing to the development of the project. 
